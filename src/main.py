@@ -53,7 +53,6 @@ def scrape_batch(url, key, batch_ids):
         logging.debug(f"Request failed. Exception {e}. Batch ids: {batch_ids}")
         return None
 
-
 def batches(product_list, batch_size, sleep_time=0):
     prod_batch_generator = (
             (k, [prod_id for _, prod_id in g])
