@@ -93,7 +93,6 @@ if __name__ == "__main__":
             if re.match('"[0-9]+"$', pid)
         }
 
-    result_nested = []
 
     for batch_i, product_batch in batches(product_ids, batch_size=1000, sleep_time=1):
         logging.info(f"Processing batch: {batch_i}")
@@ -101,29 +100,28 @@ if __name__ == "__main__":
         batch_result = scrape_batch(parameters.get("api_url"),
                                     parameters.get("#api_key"),
                                     product_batch)
-        result_nested.append(batch_result)
 
-    logging.info("Batch processing finished.")
 
-    results = [
-        # filter item columns to only relevant ones and add utctime_started
-        {
-            **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
-            **{'utctime_started': utctime_started}
-        }
-        for sublist
-        in result_nested
-        # drop empty sublists or None results
-        if sublist
-        for item
-        in sublist
-    ]
+        results = [
+            # filter item columns to only relevant ones and add utctime_started
+            {
+                **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
+                **{'utctime_started': utctime_started}
+            }
+            for item
+            in batch_result
+            # drop empty sublists or None results
+            if batch_result
+        ]
 
-    logging.info("Results collected. Writing.")
+        logging.info(f"Batch {batch_i} results collected. Writing.")
 
-    with open(f"{kbc_datadir}out/tables/ceneo_prices.csv", 'w') as f:
-        dict_writer = csv.DictWriter(f, wanted_columns + ["utctime_started"])
-        dict_writer.writeheader()
-        dict_writer.writerows(results)
+        with open(f"{kbc_datadir}out/tables/ceneo_prices.csv", 'a+', encoding="utf-8") as f:
+            dict_writer = csv.DictWriter(f, wanted_columns + ["utctime_started"])
+            if batch_i == 0:
+                dict_writer.writeheader()
+            dict_writer.writerows(results)
+
+        logging.info(f"Batch {batch_i} processing finished.")
 
     logging.info("Finished.")
