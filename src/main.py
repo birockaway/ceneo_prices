@@ -149,7 +149,7 @@ if __name__ == "__main__":
                 "ceneo_prices"
             ]
         }
-        with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.manifest", "w",
+        with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.csv.manifest", "w",
                   encoding="utf-8") as f:
             json.dump(manifest, f)
 
