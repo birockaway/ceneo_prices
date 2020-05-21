@@ -1,4 +1,3 @@
-from keboola import docker
 import csv
 import os
 import re
@@ -7,6 +6,10 @@ import itertools
 import requests
 import logging
 import datetime
+import json
+
+from keboola import docker
+from logstash_formatter import LogstashFormatterV1
 
 
 def parse_item(product_card):
@@ -29,18 +32,23 @@ def scrape_batch(url, key, batch_ids):
     try:
         req = requests.get(url, params=params)
 
+    except Exception as e:
+        logger.debug(f"Request failed. Exception {e}. Batch ids: {batch_ids}")
+        return None
+
+    else:
         if not req.ok:
-            logging.debug(f"Request failed. Status: {req.status_code}")
+            logger.debug(f"Request failed. Status: {req.status_code}")
             return None
 
         req_json = req.json()
 
         if req_json["Response"]["Status"] != "OK":
-            logging.debug(f"Request body returned non-ok status. {req_json}. Batch ids: {batch_ids}")
+            logger.debug(f"Request body returned non-ok status. {req_json}. Batch ids: {batch_ids}")
             return None
 
         if "product_offers_by_ids" not in req_json["Response"]["Result"].keys():
-            logging.debug(f"Request did not return any product data. Result: {req_json}. Batch ids: {batch_ids}")
+            logger.debug(f"Request did not return any product data. Result: {req_json}. Batch ids: {batch_ids}")
             return None
 
         result = list(itertools.chain(*[parse_item(item) for item
@@ -49,16 +57,13 @@ def scrape_batch(url, key, batch_ids):
 
         return result
 
-    except Exception as e:
-        logging.debug(f"Request failed. Exception {e}. Batch ids: {batch_ids}")
-        return None
 
 def batches(product_list, batch_size, sleep_time=0):
     prod_batch_generator = (
-            (k, [prod_id for _, prod_id in g])
-            for k, g
-            in itertools.groupby(enumerate(product_list), key=lambda x_: x_[0] // batch_size)
-        )
+        (k, [prod_id for _, prod_id in g])
+        for k, g
+        in itertools.groupby(enumerate(product_list), key=lambda x_: x_[0] // batch_size)
+    )
 
     # yield the first batch without waiting
     yield next(prod_batch_generator, (None, []))
@@ -70,15 +75,24 @@ def batches(product_list, batch_size, sleep_time=0):
 
 
 if __name__ == "__main__":
+
+    logger = logging.getLogger()
+    handler = logging.StreamHandler()
+    formatter = LogstashFormatterV1()
+
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(level="DEBUG")
+
     utctime_started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    logging.basicConfig(format='%(name)s, %(asctime)s, %(levelname)s, %(message)s',
-                        level=logging.DEBUG)
+    utctime_started_short = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+
     kbc_datadir = os.getenv("KBC_DATADIR")
     cfg = docker.Config(kbc_datadir)
     parameters = cfg.get_parameters()
 
     # log parameters (excluding sensitive designated by '#')
-    logging.info({k: v for k, v in parameters.items() if "#" not in k})
+    logger.info({k: v for k, v in parameters.items() if "#" not in k})
 
     input_filename = parameters.get("input_filename")
     wanted_columns = parameters.get("wanted_columns")
@@ -93,14 +107,12 @@ if __name__ == "__main__":
             if re.match('"[0-9]+"$', pid)
         }
 
-
     for batch_i, product_batch in batches(product_ids, batch_size=1000, sleep_time=1):
         logging.info(f"Processing batch: {batch_i}")
 
         batch_result = scrape_batch(parameters.get("api_url"),
                                     parameters.get("#api_key"),
                                     product_batch)
-
 
         results = [
             # filter item columns to only relevant ones and add utctime_started
@@ -114,14 +126,31 @@ if __name__ == "__main__":
             if batch_result
         ]
 
-        logging.info(f"Batch {batch_i} results collected. Writing.")
+        logger.info(f"Batch {batch_i} results collected. Writing.")
 
-        with open(f"{kbc_datadir}out/tables/ceneo_prices.csv", 'a+', encoding="utf-8") as f:
+        with open(f"{kbc_datadir}out/tables/ceneo_prices_{utctime_started_short}.csv",
+                  "a+", encoding="utf-8") as f:
             dict_writer = csv.DictWriter(f, wanted_columns + ["utctime_started"])
             if batch_i == 0:
                 dict_writer.writeheader()
             dict_writer.writerows(results)
 
-        logging.info(f"Batch {batch_i} processing finished.")
+        logger.info(f"Batch {batch_i} processing finished.")
 
-    logging.info("Finished.")
+        logger.info("All batches finished. Writing manifest file.")
+
+        manifest = {
+            "is_public": False,
+            "is_permanent": False,
+            "is_encrypted": True,
+            "notify": False,
+            "tags": [
+                "to_process",
+                "ceneo_prices"
+            ]
+        }
+        with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.manifest", "w",
+                  encoding="utf-8") as f:
+            json.dump(manifest, f)
+
+    logger.info("Finished.")
