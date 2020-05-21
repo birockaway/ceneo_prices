@@ -128,7 +128,7 @@ if __name__ == "__main__":
 
         logger.info(f"Batch {batch_i} results collected. Writing.")
 
-        with open(f"{kbc_datadir}out/tables/ceneo_prices_{utctime_started_short}.csv",
+        with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.csv",
                   "a+", encoding="utf-8") as f:
             dict_writer = csv.DictWriter(f, wanted_columns + ["utctime_started"])
             if batch_i == 0:
