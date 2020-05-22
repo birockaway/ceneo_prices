@@ -138,6 +138,8 @@ if __name__ == "__main__":
             in batch_result
             # drop products not on ceneo
             if item.get("product_CeneoProdID")
+            # ceneo records sometimes lack eshop name, which makes them useless
+            and item.get("CustName", "") != ""
             # drop empty sublists or None results
             if batch_result
         ]
