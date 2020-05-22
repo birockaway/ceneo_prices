@@ -15,10 +15,11 @@ from logstash_formatter import LogstashFormatterV1
 
 def parse_offer(offer_raw):
     offer = offer_raw.copy()
-    offer["eshop"] = (urlparse(offer.get("CustName", "")).netloc.lower()
+    eshop = (urlparse(offer.get("CustName", "")).netloc.lower()
                       if urlparse(offer.get("CustName", "")).netloc.lower() != ""
                       else offer.get("CustName", "").lower()
                       )
+    offer["eshop"] = re.sub('(^www.)|(/*)', eshop)
     return offer
 
 
