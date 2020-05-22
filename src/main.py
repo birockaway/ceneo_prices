@@ -19,7 +19,7 @@ def parse_offer(offer_raw):
                       if urlparse(offer.get("CustName", "")).netloc.lower() != ""
                       else offer.get("CustName", "").lower()
                       )
-    offer["eshop"] = re.sub('(^www.)|(/*)', eshop)
+    offer["eshop"] = re.sub('(^www.)|(/*)', "", eshop)
     return offer
 
 
