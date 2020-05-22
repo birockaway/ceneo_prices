@@ -15,7 +15,9 @@ from logstash_formatter import LogstashFormatterV1
 
 def parse_offer(offer_raw):
     offer = offer_raw.copy()
-    offer["eshop"] = urlparse(offer.get("CustName", "")).netloc.lower()
+    offer["eshop"] = (urlparse(offer.get("CustName", "")).netloc.lower()
+                      if offer.get("CustName", "") != "" else offer.get("CustName", "").lower()
+                      )
     return offer
 
 
