@@ -15,7 +15,7 @@ from logstash_formatter import LogstashFormatterV1
 
 def parse_offer(offer_raw):
     offer = offer_raw.copy()
-    offer["CustName"] = urlparse(offer.get("CustName", "")).netloc.lower()
+    offer["eshop"] = urlparse(offer.get("CustName", "")).netloc.lower()
     return offer
 
 
@@ -127,7 +127,7 @@ if __name__ == "__main__":
             {
                 **{wanted_columns_mapping[colname]: colval for colname, colval in item.items()
                    if colname in wanted_columns_mapping.keys()},
-                **{"utctime_started": utctime_started, "country": "PL", "distrchan": "MA",
+                **{"ts": utctime_started, "country": "PL", "distrchan": "MA", "source": "ceneo",
                    "source_id": f"ceneo_PL_{utctime_started_short}", "freq": "d"}
             }
             for item
@@ -142,7 +142,7 @@ if __name__ == "__main__":
 
         with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.csv",
                   "a+", encoding="utf-8") as f:
-            dict_writer = csv.DictWriter(f, wanted_columns_mapping + ["utctime_started"])
+            dict_writer = csv.DictWriter(f, wanted_columns_mapping.values())
             if batch_i == 0:
                 dict_writer.writeheader()
             dict_writer.writerows(results)
