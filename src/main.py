@@ -103,7 +103,7 @@ if __name__ == "__main__":
     logger.info({k: v for k, v in parameters.items() if "#" not in k})
 
     input_filename = parameters.get("input_filename")
-    wanted_columns_mapping = parameters.get("wanted_columns")
+    wanted_columns_mapping = parameters.get("wanted_columns_mapping")
 
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
