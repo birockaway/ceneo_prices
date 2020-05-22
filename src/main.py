@@ -21,7 +21,7 @@ def parse_offer(offer_raw):
 
 def parse_product(product_card):
     common_keys = {"product_" + k: v for k, v in product_card.items() if k != "offers"}
-    common_keys["cse_url"] = f"https://ceneo.pl/{common_keys['CeneoProdID']}"
+    common_keys["cse_url"] = f"https://ceneo.pl/{common_keys.get('CeneoProdID', '')}"
 
     if product_card.get("offers") is not None:
         offer_details = product_card["offers"]["offer"]
