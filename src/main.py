@@ -7,27 +7,35 @@ import requests
 import logging
 import datetime
 import json
+from urllib.parse import urlparse
 
 from keboola import docker
 from logstash_formatter import LogstashFormatterV1
 
 
-def parse_item(product_card):
+def parse_offer(offer_raw):
+    offer = offer_raw.copy()
+    offer["CustName"] = urlparse(offer.get("CustName", "")).netloc.lower()
+    return offer
+
+
+def parse_product(product_card):
     common_keys = {"product_" + k: v for k, v in product_card.items() if k != "offers"}
+    common_keys["cse_url"] = f"https://ceneo.pl/{common_keys['product_CeneoProdID']}"
 
     if product_card.get("offers") is not None:
         offer_details = product_card["offers"]["offer"]
     else:
         return [common_keys]
 
-    eshop_offers = [{**common_keys, **offer_detail} for offer_detail in offer_details]
+    eshop_offers = [{**common_keys, **parse_offer(offer_detail)} for offer_detail in offer_details]
     return eshop_offers
 
 
 def scrape_batch(url, key, batch_ids):
-    params = (('apiKey', key),
-              ('resultFormatter', 'json'),
-              ('shop_product_ids_comma_separated', ",".join(batch_ids))
+    params = (("apiKey", key),
+              ("resultFormatter", "json"),
+              ("shop_product_ids_comma_separated", ",".join(batch_ids))
               )
     try:
         req = requests.get(url, params=params)
@@ -51,7 +59,7 @@ def scrape_batch(url, key, batch_ids):
             logger.debug(f"Request did not return any product data. Result: {req_json}. Batch ids: {batch_ids}")
             return None
 
-        result = list(itertools.chain(*[parse_item(item) for item
+        result = list(itertools.chain(*[parse_product(item) for item
                                         in req_json["Response"]["Result"]["product_offers_by_ids"][
                                             "product_offers_by_id"]]))
 
@@ -95,7 +103,7 @@ if __name__ == "__main__":
     logger.info({k: v for k, v in parameters.items() if "#" not in k})
 
     input_filename = parameters.get("input_filename")
-    wanted_columns = parameters.get("wanted_columns")
+    wanted_columns_mapping = parameters.get("wanted_columns")
 
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
@@ -117,11 +125,15 @@ if __name__ == "__main__":
         results = [
             # filter item columns to only relevant ones and add utctime_started
             {
-                **{colname: colval for colname, colval in item.items() if colname in wanted_columns},
-                **{'utctime_started': utctime_started}
+                **{wanted_columns_mapping[colname]: colval for colname, colval in item.items()
+                   if colname in wanted_columns_mapping.keys()},
+                **{"utctime_started": utctime_started, "country": "PL", "distrchan": "MA",
+                   "source_id": f"ceneo_PL_{utctime_started_short}", "freq": "d"}
             }
             for item
             in batch_result
+            # drop products not on ceneo
+            if item.get("product_CeneoProdID")
             # drop empty sublists or None results
             if batch_result
         ]
@@ -130,7 +142,7 @@ if __name__ == "__main__":
 
         with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.csv",
                   "a+", encoding="utf-8") as f:
-            dict_writer = csv.DictWriter(f, wanted_columns + ["utctime_started"])
+            dict_writer = csv.DictWriter(f, wanted_columns_mapping + ["utctime_started"])
             if batch_i == 0:
                 dict_writer.writeheader()
             dict_writer.writerows(results)
@@ -142,7 +154,7 @@ if __name__ == "__main__":
         manifest = {
             "is_public": False,
             "is_permanent": False,
-            "is_encrypted": True,
+            "is_encrypted": False,
             "notify": False,
             "tags": [
                 "to_process",
