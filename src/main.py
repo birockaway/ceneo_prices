@@ -6,8 +6,10 @@ import itertools
 import requests
 import logging
 import datetime
-import json
 from urllib.parse import urlparse
+import queue
+import threading
+import concurrent.futures
 
 from keboola import docker
 from logstash_formatter import LogstashFormatterV1
@@ -16,9 +18,9 @@ from logstash_formatter import LogstashFormatterV1
 def parse_offer(offer_raw):
     offer = offer_raw.copy()
     eshop = (urlparse(offer.get("CustName", "")).netloc.lower()
-                      if urlparse(offer.get("CustName", "")).netloc.lower() != ""
-                      else offer.get("CustName", "").lower()
-                      )
+             if urlparse(offer.get("CustName", "")).netloc.lower() != ""
+             else offer.get("CustName", "").lower()
+             )
     offer["eshop"] = re.sub('(^www.)|(/*)', "", eshop)
     return offer
 
@@ -45,22 +47,22 @@ def scrape_batch(url, key, batch_ids):
         req = requests.get(url, params=params)
 
     except Exception as e:
-        logger.debug(f"Request failed. Exception {e}. Batch ids: {batch_ids}")
+        logging.debug(f"Request failed. Exception {e}. Batch ids: {batch_ids}")
         return None
 
     else:
         if not req.ok:
-            logger.debug(f"Request failed. Status: {req.status_code}")
+            logging.debug(f"Request failed. Status: {req.status_code}")
             return None
 
         req_json = req.json()
 
         if req_json["Response"]["Status"] != "OK":
-            logger.debug(f"Request body returned non-ok status. {req_json}. Batch ids: {batch_ids}")
+            logging.debug(f"Request body returned non-ok status. {req_json}. Batch ids: {batch_ids}")
             return None
 
         if "product_offers_by_ids" not in req_json["Response"]["Result"].keys():
-            logger.debug(f"Request did not return any product data. Result: {req_json}. Batch ids: {batch_ids}")
+            logging.debug(f"Request did not return any product data. Result: {req_json}. Batch ids: {batch_ids}")
             return None
 
         result = list(itertools.chain(*[parse_product(item) for item
@@ -86,28 +88,15 @@ def batches(product_list, batch_size, sleep_time=0):
         yield batch
 
 
-if __name__ == "__main__":
-
-    logger = logging.getLogger()
-    handler = logging.StreamHandler()
-    formatter = LogstashFormatterV1()
-
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(level="DEBUG")
-
-    utctime_started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    utctime_started_short = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-
-    kbc_datadir = os.getenv("KBC_DATADIR")
+def parse_configs():
+    kbc_datadir = os.getenv("KBC_DATADIR", "/data/")
     cfg = docker.Config(kbc_datadir)
     parameters = cfg.get_parameters()
 
     # log parameters (excluding sensitive designated by '#')
-    logger.info({k: v for k, v in parameters.items() if "#" not in k})
+    logging.info({k: v for k, v in parameters.items() if "#" not in k})
 
     input_filename = parameters.get("input_filename")
-    wanted_columns_mapping = parameters.get("wanted_columns_mapping")
 
     # read unique product ids
     with open(f'{kbc_datadir}in/tables/{input_filename}.csv') as input_file:
@@ -118,6 +107,14 @@ if __name__ == "__main__":
             in input_file.read().split(os.linesep)[1:]
             if re.match('"[0-9]+"$', pid)
         }
+    return product_ids, parameters
+
+
+def producer(task_queue):
+    utctime_started = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    utctime_started_short = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    product_ids, parameters = parse_configs()
+    columns_mapping = parameters.get("columns_mapping")
 
     for batch_i, product_batch in batches(product_ids, batch_size=1000, sleep_time=1):
         logging.info(f"Processing batch: {batch_i}")
@@ -129,46 +126,79 @@ if __name__ == "__main__":
         results = [
             # filter item columns to only relevant ones and add utctime_started
             {
-                **{wanted_columns_mapping[colname]: colval for colname, colval in item.items()
-                   if colname in wanted_columns_mapping.keys()},
-                **{"ts": utctime_started, "country": "PL", "distrchan": "MA", "source": "ceneo",
-                   "source_id": f"ceneo_PL_{utctime_started_short}", "freq": "d"}
+                **{columns_mapping[colname]: colval for colname, colval in item.items()
+                   if colname in columns_mapping.keys()},
+                **{"TS": utctime_started, "COUNTRY": "PL", "DISTRCHAN": "MA", "SOURCE": "ceneo",
+                   "SOURCE_ID": f"ceneo_PL_{utctime_started_short}", "FREQ": "d"}
             }
             for item
             in batch_result
             # drop products not on ceneo
             if item.get("product_CeneoProdID")
-            # ceneo records sometimes lack eshop name, which makes them useless
+            # ceneo records sometimes lack eshop name
             and item.get("CustName", "") != ""
+            # records without price are useless
+            and item.get("Price", "") != ""
             # drop empty sublists or None results
             if batch_result
         ]
 
-        logger.info(f"Batch {batch_i} results collected. Writing.")
+        logging.info(f"Batch {batch_i} results collected. Queueing.")
 
-        with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.csv",
-                  "a+", encoding="utf-8") as f:
-            dict_writer = csv.DictWriter(f, wanted_columns_mapping.values())
-            if batch_i == 0:
-                dict_writer.writeheader()
-            dict_writer.writerows(results)
+        task_queue.put(results)
 
-        logger.info(f"Batch {batch_i} processing finished.")
+    logging.info("Iteration over. Putting DONE to queue.")
+    task_queue.put("DONE")
 
-        logger.info("All batches finished. Writing manifest file.")
 
-        manifest = {
-            "is_public": False,
-            "is_permanent": False,
-            "is_encrypted": False,
-            "notify": False,
-            "tags": [
-                "to_process",
-                "ceneo_prices"
-            ]
-        }
-        with open(f"{kbc_datadir}out/files/ceneo_prices_{utctime_started_short}.csv.manifest", "w",
-                  encoding="utf-8") as f:
-            json.dump(manifest, f)
+def writer(task_queue, columns_list, threading_event, filepath):
+    with open(filepath, 'w+') as outfile:
+        results_writer = csv.DictWriter(outfile, fieldnames=columns_list, extrasaction='ignore')
+        results_writer.writeheader()
+        while not threading_event.is_set():
+            chunk = task_queue.get()
+            if chunk == 'DONE':
+                logging.info('DONE received. Exiting.')
+                threading_event.set()
+            else:
+                results_writer.writerows(chunk)
 
-    logger.info("Finished.")
+
+if __name__ == '__main__':
+    logger = logging.getLogger()
+    handler = logging.StreamHandler()
+    formatter = LogstashFormatterV1()
+
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(level="DEBUG")
+
+    colnames = ['AVAILABILITY',
+                'COUNTRY',
+                'CSE_ID',
+                'CSE_URL',
+                'DISTRCHAN',
+                'ESHOP',
+                'FREQ',
+                'HIGHLIGHTED_POSITION',
+                'MATERIAL',
+                'POSITION',
+                'PRICE',
+                'RATING',
+                'REVIEW_COUNT',
+                'SOURCE',
+                'SOURCE_ID',
+                'STOCK',
+                'TOP',
+                'TS',
+                'URL', ]
+
+    path = f'{os.getenv("KBC_DATADIR")}out/tables/results.csv'
+
+    pipeline = queue.Queue(maxsize=1000)
+    event = threading.Event()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        executor.submit(producer, pipeline)
+        executor.submit(writer, pipeline, colnames, event, path)
+
+    logger.info("Script finished")
