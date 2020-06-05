@@ -164,41 +164,49 @@ def writer(task_queue, columns_list, threading_event, filepath):
                 results_writer.writerows(chunk)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+
+    logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger()
-    handler = logging.StreamHandler()
-    formatter = LogstashFormatterV1()
+    try:
+        logging_gelf_handler = logging_gelf.handlers.GELFTCPSocketHandler(host=os.getenv('KBC_LOGGER_ADDR'),
+                                                                          port=int(os.getenv('KBC_LOGGER_PORT')))
+        # remove stdout logging when running inside keboola
+        logger.removeHandler(logger.handlers[0])
+    except TypeError:
+        logging_gelf_handler = logging.StreamHandler()
 
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(level="DEBUG")
+    logging_gelf_handler.setFormatter(logging_gelf.formatters.GELFFormatter(null_character=True))
+    logger.addHandler(logging_gelf_handler)
 
-    colnames = ['AVAILABILITY',
-                'COUNTRY',
-                'CSE_ID',
-                'CSE_URL',
-                'DISTRCHAN',
-                'ESHOP',
-                'FREQ',
-                'HIGHLIGHTED_POSITION',
-                'MATERIAL',
-                'POSITION',
-                'PRICE',
-                'RATING',
-                'REVIEW_COUNT',
-                'SOURCE',
-                'SOURCE_ID',
-                'STOCK',
-                'TOP',
-                'TS',
-                'URL', ]
+    colnames = [
+        "AVAILABILITY",
+        "COUNTRY",
+        "CSE_ID",
+        "CSE_URL",
+        "DISTRCHAN",
+        "ESHOP",
+        "FREQ",
+        "HIGHLIGHTED_POSITION",
+        "MATERIAL",
+        "POSITION",
+        "PRICE",
+        "RATING",
+        "REVIEW_COUNT",
+        "SOURCE",
+        "SOURCE_ID",
+        "STOCK",
+        "TOP",
+        "TS",
+        "URL",
+    ]
 
     path = f'{os.getenv("KBC_DATADIR")}out/tables/results.csv'
 
     pipeline = queue.Queue(maxsize=1000)
     event = threading.Event()
+    producer = Producer()
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         executor.submit(producer, pipeline)
         executor.submit(writer, pipeline, colnames, event, path)
-
-    logger.info("Script finished")
