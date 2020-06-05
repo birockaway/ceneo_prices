@@ -12,7 +12,8 @@ import threading
 import concurrent.futures
 
 from keboola import docker
-from logstash_formatter import LogstashFormatterV1
+import logging_gelf.handlers
+import logging_gelf.formatters
 
 
 def parse_offer(offer_raw):
@@ -135,10 +136,10 @@ def producer(task_queue):
             in batch_result
             # drop products not on ceneo
             if item.get("product_CeneoProdID")
-            # ceneo records sometimes lack eshop name
-            and item.get("CustName", "") != ""
-            # records without price are useless
-            and item.get("Price", "") != ""
+               # ceneo records sometimes lack eshop name
+               and item.get("CustName", "") != ""
+               # records without price are useless
+               and item.get("Price", "") != ""
             # drop empty sublists or None results
             if batch_result
         ]
